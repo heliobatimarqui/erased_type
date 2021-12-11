@@ -4,19 +4,19 @@ MIT License
 Copyright (c) 2021 Helio Nunes Santos
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
-        of this software and associated documentation files (the "Software"), to deal
+of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights
-        to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-        copies of the Software, and to permit persons to whom the Software is
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
 furnished to do so, subject to the following conditions:
 
 The above copyright notice and this permission notice shall be included in all
-        copies or substantial portions of the Software.
+copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-        AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
@@ -57,6 +57,8 @@ public:
 
 template<size_t BUFFER_SIZE>
 class erased_type {
+    static_assert(BUFFER_SIZE % alignof(void*) == 0, "BUFFER SIZE % alignof(void*) has to be 0");
+
     struct manager_base {
         virtual bool can_T_be_memcopied() = 0;
         virtual void destroy_fn(erased_type&) = 0;
@@ -185,6 +187,17 @@ public:
         return m_manager != nullptr;
     }
 
+    void* get_pointer_to_val() {
+        const auto& as_const = *this;
+        return const_cast<void*>(as_const.get_pointer_to_val());
+    }
+
+    const void* get_pointer_to_val() const {
+        if(has_value())
+            return m_manager->get_pointer_to_val(*this);
+        return nullptr;
+    }
+
     const std::type_info& type() const noexcept {
         if(this->has_value())
             return m_manager->T_type_info();
@@ -227,22 +240,22 @@ public:
 
 template<typename T, typename ET, typename = typename std::enable_if<std::is_same_v<std::decay_t<ET>, erased_type<std::decay_t<ET>::buffer_size()>>, void>::type, typename = typename std::enable_if<std::is_same_v<T, std::decay_t<T>>, void>::type>
 auto erased_type_cast(ET&& et) -> if_else_t<std::is_rvalue_reference_v<decltype(et)>, T, if_else_t<std::is_const_v<std::remove_reference_t<decltype(et)>>, const T&, T&>> {
-    if (typeid(T) != et.type()) throw bad_erased_type_cast();
+    if (typeid(T) != et.type() || !et.has_value()) throw bad_erased_type_cast();
 
     if constexpr (std::is_rvalue_reference_v<decltype(et)>) {
-        return std::move(*static_cast<T*>(et.m_manager->get_pointer_to_val(et)));
+        return std::move(*static_cast<T*>(et.get_pointer_to_val()));
     }
     else if constexpr (std::is_const_v<std::remove_reference_t<decltype(et)>>) {
-        return *static_cast<const T*>(et.m_manager->get_pointer_to_val(et));
+        return *static_cast<const T*>(et.get_pointer_to_val());
     }
     else if constexpr(!std::is_const_v<std::remove_reference_t<decltype(et)>>){
-        return *static_cast<T*>(et.m_manager->get_pointer_to_val(et));
+        return *static_cast<T*>(et.get_pointer_to_val());
     }
 }
 
 template<typename T, typename ...Args>
 auto make_erased_type(Args&&... args) {
-    return erased_type<sizeof(T)>(std::forward<Args>(args)...);
+    return erased_type<sizeof(T) + sizeof(T)%alignof(void*)>(std::forward<Args>(args)...);
 };
 
 
