@@ -60,13 +60,13 @@ class erased_type {
     static_assert(BUFFER_SIZE % alignof(void*) == 0, "BUFFER SIZE % alignof(void*) has to be 0");
 
     struct manager_base {
-        virtual bool can_T_be_memcopied() = 0;
+        virtual bool is_value_trivially_copiable() = 0;
         virtual void destroy_fn(erased_type&) = 0;
         virtual void copy_fn(const erased_type& from, erased_type& to) = 0;
         virtual void move_fn(erased_type& from, erased_type& to) = 0;
-        virtual const std::type_info& T_type_info() const = 0;
-        virtual void* get_pointer_to_val(erased_type& et) = 0;
-        virtual const void* get_pointer_to_val(const erased_type& et) = 0;
+        virtual const std::type_info& value_type_info() const = 0;
+        virtual void* get_pointer_to_value(erased_type& et) = 0;
+        virtual const void* get_pointer_to_value(const erased_type& et) = 0;
 
     };
 
@@ -74,31 +74,31 @@ class erased_type {
     struct manager : manager_base {
         template<typename ...Args>
         auto& create_fn(erased_type& et, Args&&... args) {
-            auto aligned_ptr = static_cast<T*>(get_pointer_to_val(et));
+            auto aligned_ptr = static_cast<T*>(get_pointer_to_value(et));
             new(aligned_ptr)T(std::forward<Args>(args)...);
             return *aligned_ptr;
         }
 
         void destroy_fn(erased_type& et) override {
-            static_cast<T*>(get_pointer_to_val(et))->~T();
+            static_cast<T*>(get_pointer_to_value(et))->~T();
         }
 
         void copy_fn(const erased_type& from, erased_type& to) override {
-            const T& val = *static_cast<const T*>(get_pointer_to_val(from));
+            const T& val = *static_cast<const T*>(get_pointer_to_value(from));
             create_fn(to, val);
         }
 
         void move_fn(erased_type& from, erased_type& to) override {
-            T* val_from = static_cast<T*>(get_pointer_to_val(from));
+            T* val_from = static_cast<T*>(get_pointer_to_value(from));
             create_fn(to, std::move(*val_from));
         }
 
-        void* get_pointer_to_val(erased_type& et) override {
+        void* get_pointer_to_value(erased_type& et) override {
             const auto& as_const = et;
-            return const_cast<void*>(get_pointer_to_val(as_const));
+            return const_cast<void*>(get_pointer_to_value(as_const));
         }
 
-        const void* get_pointer_to_val(const erased_type& et) override {
+        const void* get_pointer_to_value(const erased_type& et) override {
             static_assert(sizeof(T) <= BUFFER_SIZE, "Buffer can't fit T.");
             auto space = BUFFER_SIZE;
             void* buffer = const_cast<std::decay_t<decltype(et.m_buffer)>>(et.m_buffer);
@@ -108,11 +108,11 @@ class erased_type {
             return aligned_ptr;
         }
 
-        const std::type_info& T_type_info() const override {
+        const std::type_info& value_type_info() const override {
             return typeid(T);
         }
 
-        bool can_T_be_memcopied() override {
+        bool is_value_trivially_copiable() override {
             return std::is_trivially_copyable_v<T>;
         }
 
@@ -131,12 +131,12 @@ public:
     erased_type() = default;
 
     template<typename T, typename = std::enable_if_t<!std::is_same_v<std::decay_t<T>, erased_type>>>
-    erased_type(T&& val) {
+    explicit erased_type(T&& val) {
         emplace<std::decay_t<T>>(std::forward<decltype(val)>(val));
     }
 
     template<typename T, typename ...Args>
-    erased_type(std::in_place_type_t<T>, Args&&... args) {
+    explicit erased_type(std::in_place_type_t<T>, Args&&... args) {
         emplace<T>(std::forward<Args>(args)...);
     }
 
@@ -153,7 +153,8 @@ public:
     }
 
     void swap(erased_type& other) noexcept {
-        if ((!has_value() || m_manager->can_T_be_memcopied()) && (!other.has_value() || other.m_manager->can_T_be_memcopied())) {
+        if ((!has_value() || m_manager->is_value_trivially_copiable()) && (!other.has_value() ||
+                                                                           other.m_manager->is_value_trivially_copiable())) {
             std::byte temp_buffer[BUFFER_SIZE];
             std::memcpy(temp_buffer, m_buffer, BUFFER_SIZE);
             std::memcpy(m_buffer, other.m_buffer, BUFFER_SIZE);
@@ -192,15 +193,15 @@ public:
         return const_cast<void*>(as_const.get_pointer_to_val());
     }
 
-    const void* get_pointer_to_val() const {
+    const void* get_pointer_to_value() const {
         if(has_value())
-            return m_manager->get_pointer_to_val(*this);
+            return m_manager->get_pointer_to_value(*this);
         return nullptr;
     }
 
     const std::type_info& type() const noexcept {
         if(this->has_value())
-            return m_manager->T_type_info();
+            return m_manager->value_type_info();
         else
             return typeid(void);
     }
@@ -243,13 +244,13 @@ auto erased_type_cast(ET&& et) -> if_else_t<std::is_rvalue_reference_v<decltype(
     if (typeid(T) != et.type() || !et.has_value()) throw bad_erased_type_cast();
 
     if constexpr (std::is_rvalue_reference_v<decltype(et)>) {
-        return std::move(*static_cast<T*>(et.get_pointer_to_val()));
+        return std::move(*static_cast<T*>(et.get_pointer_to_value()));
     }
     else if constexpr (std::is_const_v<std::remove_reference_t<decltype(et)>>) {
-        return *static_cast<const T*>(et.get_pointer_to_val());
+        return *static_cast<const T*>(et.get_pointer_to_value());
     }
     else if constexpr(!std::is_const_v<std::remove_reference_t<decltype(et)>>){
-        return *static_cast<T*>(et.get_pointer_to_val());
+        return *static_cast<T*>(et.get_pointer_to_value());
     }
 }
 
